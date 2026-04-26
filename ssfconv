@@ -110,7 +110,7 @@ def getImageAvg(image_path, area = (0, 0, 0, 0)):
             y1 -= 1
     
     # 算出区域内所有象素点的平均值
-    a = np.asarray(image)
+    a = np.asarray(image, dtype=np.int64)
     r = g = b = 0
     count = 0
     if a.shape[2] == 4:
@@ -1153,44 +1153,95 @@ def ssf2fcitx5(skin_dir):
     skin.write(open(skin_dir + os.sep + 'theme.conf', 'w', encoding="utf-8"), False)
     return 0
 
+SOUGOU_DIR = 'sougou'
+OUTPUT_DIR = 'output'
+
 def main(args):
-    
+
+    skin_format = args.type
+    pack_zip = args.zip
+    skin_name = os.path.splitext(os.path.basename(args.src))[0] if args.src else ''
+
+    # 当未指定 src 时，从 sougou 目录批量转换所有 .ssf 文件
+    if args.src is None:
+        if not os.path.isdir(SOUGOU_DIR):
+            sys.stderr.write('找不到 sougou 目录\n')
+            return 1
+        ssf_files = [f for f in os.listdir(SOUGOU_DIR)
+                     if f.lower().endswith('.ssf')]
+        if not ssf_files:
+            sys.stderr.write('sougou 目录中没有 .ssf 文件\n')
+            return 1
+        for ssf_file in ssf_files:
+            src_path = SOUGOU_DIR + os.sep + ssf_file
+            print('转换: %s' % ssf_file)
+            args.src = src_path
+            args.dest = None
+            main(args)
+        return 0
+
+    # dest 未指定时自动生成：目录用 *_fcitx5，zip用 *_fcitx5.zip
+    if args.dest is None:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        skin_name = os.path.splitext(os.path.basename(args.src))[0]
+        if pack_zip:
+            args.dest = OUTPUT_DIR + os.sep + skin_name + '_' + skin_format + '.zip'
+        else:
+            args.dest = OUTPUT_DIR + os.sep + skin_name + '_' + skin_format
+
     # 先从源文件转换成文件夹，如果已经是文件夹了则跳过
     tmp_dir = None
     if os.path.isfile(args.src):
-        
-        # 确定目标目录
-        if args.type == 'encrypted' or args.type == 'zip':
-            tmp_dir = tempfile.mkdtemp()
-            dest_dir = tmp_dir
-        else:
-            dest_dir = args.dest
-        
+        tmp_dir = tempfile.mkdtemp()
+        dest_dir = tmp_dir
+
         # 开始解压
         extractSsf(args.src, dest_dir)
-        
+
         skin_dir = dest_dir
     elif os.path.isdir(args.src):
         skin_dir = args.src
     else:
         sys.stderr.write('找不到 %s\n' % args.src)
         return 1
-    
+
     result = 255
-    if args.type == 'fcitx':
+    if skin_format == 'fcitx':
         result = ssf2fcitx(skin_dir)
-    elif args.type == 'fcitx5':
+    elif skin_format == 'fcitx5':
         result = ssf2fcitx5(skin_dir)
-    elif args.type == 'zip':
-        file_list = os.listdir(skin_dir)
-        with zipfile.ZipFile(args.dest, 'w') as zf:
-            for file in file_list:
-                zf.write(skin_dir + os.sep + file, file)
+    elif skin_format == 'dir':
         result = 0
-    elif args.type == 'encrypted':
+    elif skin_format == 'encrypted':
         assert False
-        # TODO 还没实现转换成加密的 ssf
-    
+
+    FCITX5_THEMES_DIR = os.path.expanduser('~/.local/share/fcitx5/themes')
+
+    if result == 0:
+        if pack_zip:
+            zip_path = args.dest
+            if not zip_path.lower().endswith('.zip'):
+                zip_path += '.zip'
+            os.makedirs(os.path.dirname(zip_path) or '.', exist_ok=True)
+            file_list = os.listdir(skin_dir)
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                for file in file_list:
+                    zf.write(skin_dir + os.sep + file, file)
+            if args.install and skin_format == 'fcitx5':
+                skin_name = os.path.splitext(os.path.basename(zip_path))[0]
+                install_dir = FCITX5_THEMES_DIR + os.sep + skin_name
+                os.makedirs(install_dir, exist_ok=True)
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    zf.extractall(install_dir)
+                print('已安装到 %s' % install_dir)
+        else:
+            if tmp_dir and tmp_dir != args.dest:
+                shutil.copytree(tmp_dir, args.dest, dirs_exist_ok=True)
+            if args.install and skin_format == 'fcitx5':
+                install_dir = FCITX5_THEMES_DIR + os.sep + os.path.basename(args.dest)
+                shutil.copytree(args.dest, install_dir, dirs_exist_ok=True)
+                print('已安装到 %s' % install_dir)
+
     if tmp_dir:
         shutil.rmtree(tmp_dir)
 
@@ -1199,13 +1250,18 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = \
         'Sogou input method skin file (.ssf file) converter.')
-    parser.add_argument('src', help = 'Input path')
-    parser.add_argument('dest', help = 'Output path')
+    parser.add_argument('src', nargs='?', default=None, help = 'Input path (default: sougou/*.ssf)')
+    parser.add_argument('dest', nargs='?', default=None, help = 'Output path (default: output/<skin_name>_fcitx5.zip)')
     parser.add_argument('--type', '-t',
-        help = 'The type of destination path file (folder).' + \
-            'The default is fcitx.',
-        default = 'fcitx',
-        choices = ['fcitx', 'fcitx5', 'dir', 'encrypted', 'zip'])
+        help = 'Skin format: fcitx, fcitx5 (default), dir.',
+        default = 'fcitx5',
+        choices = ['fcitx', 'fcitx5', 'dir'])
+    parser.add_argument('--zip', '-z', action='store_true', default=True,
+        help = 'Pack output as zip (default: True, use --no-zip to disable)')
+    parser.add_argument('--no-zip', dest='zip', action='store_false',
+        help = 'Output as directory instead of zip')
+    parser.add_argument('--install', '-i', action='store_true',
+        help = 'Install to ~/.local/share/fcitx5/themes/ (fcitx5 only)')
     args = parser.parse_args()
     
     exit(main(args))
