@@ -22,7 +22,8 @@ def extractSsf(ssf_file_path, dest_dir):
     """
     
     # 读取文件的二进制内容
-    ssfbin = open(ssf_file_path, 'rb').read()
+    with open(ssf_file_path, 'rb') as f:
+        ssfbin = f.read()
     
     if ssfbin[:4] == b'Skin': # 通过头四字节判断是否被加密
         # AES 解密内容
@@ -63,12 +64,17 @@ def extractSsf(ssf_file_path, dest_dir):
             content = data[offset+8+name_len:offset+8+name_len+content_len]
 
             # 写入文件
-            open(dest_dir.rstrip(os.sep)+os.sep+filename, 'wb').write(content)
+            with open(dest_dir.rstrip(os.sep)+os.sep+filename, 'wb') as f:
+                f.write(content)
 
     else:
-        
-        # 直接 zip 解压
+
+        # 直接 zip 解压（校验文件名防止 Zip Slip 路径遍历攻击）
         with zipfile.ZipFile(ssf_file_path) as zf:
+            for info in zf.infolist():
+                extract_path = os.path.join(dest_dir, info.filename)
+                if not os.path.abspath(extract_path).startswith(os.path.abspath(dest_dir) + os.sep):
+                    raise Exception('不安全的 zip 文件路径: %s' % info.filename)
             zf.extractall(dest_dir)
 
 
@@ -163,10 +169,11 @@ default_radio_img_path = io.BytesIO(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x0
         
 # 获取图片大小的函数
 def getImageSize(image_file):
-    assert image_file
+    if not image_file:
+        raise ValueError('image_file 不能为空')
     size = Image.open(image_file).size
-    assert size[0] > 0 and size[0] < 65536 and \
-           size[1] > 0 and size[1] < 65536
+    if not (0 < size[0] < 65536 and 0 < size[1] < 65536):
+        raise ValueError('图片尺寸超出范围: %s' % (size,))
     return size
 
 # 保存一个多边形到 png 文件里
@@ -201,13 +208,13 @@ def ssf2fcitx(skin_dir):
     try:
         ssf = CaseSensitiveConfigParser(allow_no_value = True)
         ssf.read(skin_ini, encoding = 'utf-16')
-    except:
-        sys.stderr.write('读取 skin.ini 失败\n')
+    except (configparser.Error, UnicodeDecodeError, OSError) as e:
+        sys.stderr.write('读取 skin.ini 失败: %s\n' % e)
         return 2
-    
+
     # 建立 conf 的对象
     skin = CaseSensitiveConfigParser(allow_no_value = True)
-    
+
     skin['SkinInfo'] = {
         # 皮肤名称
         'Name': ssf['General']['skin_name'],
@@ -549,12 +556,14 @@ def ssf2fcitx(skin_dir):
     if pinyin_marge:
         pinyin_marge = tuple(map(lambda s:int(s), pinyin_marge.split(',')))
     else:
-        assert False
+        sys.stderr.write('缺少 pinyin_marge 配置\n')
+        return 3
     zhongwen_marge = tryGetValue('Scheme_H1', 'zhongwen_marge')
     if zhongwen_marge:
         zhongwen_marge = tuple(map(lambda s:int(s), zhongwen_marge.split(',')))
     else:
-        assert False
+        sys.stderr.write('缺少 zhongwen_marge 配置\n')
+        return 3
     separator = tryGetValue('Scheme_H1', 'separator')
     sep = 1 if separator else 0
     InputPos = pinyin_marge[0] + font_size
@@ -705,7 +714,8 @@ def ssf2fcitx(skin_dir):
         #'KeyColor': '%d %d %d' % first_color,
     }
     
-    skin.write(open(skin_dir + os.sep + 'fcitx_skin.conf', 'w', encoding="utf-8"), False)
+    with open(skin_dir + os.sep + 'fcitx_skin.conf', 'w', encoding="utf-8") as f:
+        skin.write(f, False)
 
 def ssf2fcitx5(skin_dir):
     """
@@ -730,13 +740,13 @@ def ssf2fcitx5(skin_dir):
     try:
         ssf = CaseSensitiveConfigParser(allow_no_value = True)
         ssf.read(skin_ini, encoding = 'utf-16')
-    except:
-        sys.stderr.write('读取 skin.ini 失败\n')
+    except (configparser.Error, UnicodeDecodeError, OSError) as e:
+        sys.stderr.write('读取 skin.ini 失败: %s\n' % e)
         return 2
-    
+
     # 建立 conf 的对象
     skin = CaseSensitiveConfigParser(allow_no_value = True)
-    
+
     skin['Metadata'] = {
         # 皮肤名称
         'Name': ssf['General']['skin_name'],
@@ -872,14 +882,16 @@ def ssf2fcitx5(skin_dir):
     if pinyin_marge:
         pinyin_marge = tuple(map(lambda s:int(s), pinyin_marge.split(',')))
     else:
-        assert False
+        sys.stderr.write('缺少 pinyin_marge 配置\n')
+        return 3
 
     # 候选词边距
     zhongwen_marge = tryGetValue('Scheme_H1', 'zhongwen_marge')
     if zhongwen_marge:
         zhongwen_marge = tuple(map(lambda s:int(s), zhongwen_marge.split(',')))
     else:
-        assert False
+        sys.stderr.write('缺少 zhongwen_marge 配置\n')
+        return 3
 
     # 分隔符长度
     sep = 1 if tryGetValue('Scheme_H1', 'separator') else 0
@@ -1150,7 +1162,8 @@ def ssf2fcitx5(skin_dir):
         'Bottom': 5,
     }
 
-    skin.write(open(skin_dir + os.sep + 'theme.conf', 'w', encoding="utf-8"), False)
+    with open(skin_dir + os.sep + 'theme.conf', 'w', encoding="utf-8") as f:
+        skin.write(f, False)
     return 0
 
 SOUGOU_DIR = 'sougou'
@@ -1213,7 +1226,8 @@ def main(args):
     elif skin_format == 'dir':
         result = 0
     elif skin_format == 'encrypted':
-        assert False
+        sys.stderr.write('encrypted 输出格式暂未实现\n')
+        return 1
 
     FCITX5_THEMES_DIR = os.path.expanduser('~/.local/share/fcitx5/themes')
 
